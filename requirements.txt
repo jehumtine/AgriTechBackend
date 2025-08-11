@@ -2,3 +2,5 @@ fastapi
 pydantic_settings
 sqlalchemy
 uvicorn
+google-generativeai
+pillow
