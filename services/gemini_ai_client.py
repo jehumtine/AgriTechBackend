@@ -12,6 +12,15 @@ except Exception as e:
     print(f"Error configuring Gemini API: {e}")
     gemini_model = None # Set to None if configuration fails
 
+
+def get_gemini_model_for_text():
+    """
+    Returns a configured Gemini model for text-only generation.
+    """
+    return gemini_model
+
+
+
 async def analyze_image_with_gemini(image_path: str) -> Optional[Dict[str, Any]]:
     """
     Sends an image to the Gemini API with a prompt to identify soil type.
