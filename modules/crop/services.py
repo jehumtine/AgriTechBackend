@@ -1,99 +1,123 @@
-from typing import List
+# app/modules/crop/services.py
+import os
 import json
+import google.generativeai as genai
+from sqlalchemy.orm import Session
+from typing import List
 from datetime import datetime
 
-from services.gemini_ai_client import get_gemini_model_for_text
-from modules.crop.schemas import CropRecommendation
+from modules.crop.schemas import RecommendationRequest, CropRecommendation
+from modules.crop.model import CropRecommendation as CropRecommendationModel  # Renamed to avoid clash
+from modules.sensor_data.services import get_simulated_sensor_data
+from core.config import settings
 
-# We will need a specific model for this task, so we create a new one.
-text_model = get_gemini_model_for_text()
+# Configure Gemini API
+API_KEY = "AIzaSyDBxs1alLA5dJK6n2B6rXHuPoIgfuq0PLk"
+if not API_KEY:
+    print("WARNING: GOOGLE_API_KEY environment variable not set. Using a placeholder.")
+    genai.configure(api_key="placeholder")
+else:
+    genai.configure(api_key=API_KEY)
+
+text_model = genai.GenerativeModel("gemini-1.5-flash-latest")
 
 
 async def get_crop_recommendations_from_gemini(
-        soil_type: str,
-        season: str,
-        zone: str,
-        latitude: float,
-        longitude: float,
-        soil_moisture: float,
-        soil_temperature: float,
-        electrical_conductivity: float,
-        soil_ph: float,
-        relative_humidity: float,
-        solar_radiation: float,
+        request_data: RecommendationRequest,
+        db: Session
 ) -> List[CropRecommendation]:
     """
-    Generates crop recommendations using the Gemini API based on detailed user inputs
-    and sensor data.
+    Generates a list of crop recommendations based on location data, saves them
+    to the database, and returns the parsed list.
     """
-    # Construct a detailed prompt for the Gemini API
+    # 1. Gather all necessary input data
+    sensor_data = get_simulated_sensor_data(request_data.latitude, request_data.longitude)
+
+    # 2. Construct a prompt for Gemini
     prompt = f"""
-    You are an expert agricultural advisor for farmers in Zambia.
-    Based on the following conditions, recommend 3 to 5 crops that are most suitable for cultivation.
+    You are an expert agronomist for small-scale farming in Zambia.
+    Your task is to provide a list of top 3 optimal crop recommendations for a farm based on its soil type and current sensor data.
+    For each recommendation, provide a detailed reasoning and a suitability score from 0 to 1.
 
     Conditions:
-    - **General Farm Details:**
-        - Soil Type: {soil_type}
-        - Current Season: {season}
-        - Agro-ecological Zone: {zone}
-        - Latitude: {latitude}
-        - Longitude: {longitude}
-    - **Real-Time Sensor Readings:**
-        - Soil Moisture: {soil_moisture}%
-        - Soil Temperature: {soil_temperature}°C
-        - Electrical Conductivity (Salinity): {electrical_conductivity} dS/m
-        - Soil pH: {soil_ph}
-        - Relative Humidity: {relative_humidity}%
-        - Solar Radiation: {solar_radiation} W/m^2
+    - Soil Type: {request_data.soil_type}
+    - Location: Latitude {request_data.latitude}, Longitude {request_data.longitude}
 
-    For each recommended crop, provide a brief, clear explanation (reasoning) of why it is suitable under these specific conditions. Also, provide a 'suitability_score' from 0.0 to 1.0 (where 1.0 is a perfect match) for each crop, based on how well it fits the criteria.
-    The response must be in a JSON format. Do not include any text before or after the JSON object.
+    Real-Time Sensor Readings:
+    - Soil Moisture: {sensor_data.soil_moisture}%
+    - Soil Temperature: {sensor_data.soil_temperature}°C
+    - Electrical Conductivity (Salinity): {sensor_data.electrical_conductivity} dS/m
+    - Soil pH: {sensor_data.soil_ph}
+    - Relative Humidity: {sensor_data.relative_humidity}%
+    - Solar Radiation: {sensor_data.solar_radiation} W/m^2
+    - Nitrate Level: {sensor_data.nitrate_ppm} ppm
+
+    The response must be a JSON object with a single key 'recommendations' that contains a list of 3 objects, each with 'crop_name', 'reasoning', and 'suitability_score'. Do not include any text before or after the JSON.
 
     Example JSON structure:
     {{
       "recommendations": [
         {{
           "crop_name": "Maize",
-          "reasoning": "Maize is well-suited for loamy soils and is drought-resistant, making it a good choice for the dry season. The current soil moisture and temperature are within its optimal range.",
+          "reasoning": "Maize is highly suitable for the current loamy sand soil and is a staple crop in Zambia. The sensor data indicates optimal moisture and pH levels for its growth.",
           "suitability_score": 0.95
         }},
         {{
           "crop_name": "Sorghum",
-          "reasoning": "Sorghum thrives in hot and dry conditions and can handle various soil types, making it a robust alternative for this zone. It is particularly tolerant of the current electrical conductivity levels.",
+          "reasoning": "Sorghum is a drought-resistant crop, making it a good secondary option. It can tolerate the high solar radiation and is less sensitive to variations in soil moisture.",
           "suitability_score": 0.88
         }}
       ]
     }}
     """
 
-    print("Sending detailed prompt to Gemini API...")
+    print("Sending crop recommendation prompt to Gemini API...")
     try:
         response = await text_model.generate_content_async(prompt)
         response_text = response.text
-        print(f"Gemini raw response: {response_text}")
 
-        # The API might sometimes add extra characters, so we try to find the JSON part.
         json_start = response_text.find('{')
         json_end = response_text.rfind('}') + 1
 
         if json_start != -1 and json_end != -1:
             json_response_string = response_text[json_start:json_end]
             parsed_response = json.loads(json_response_string)
+            recommendations_list = parsed_response.get("recommendations", [])
 
-            recommendations_list = [
+            # Save each recommendation to the database
+            for rec in recommendations_list:
+                new_recommendation = CropRecommendationModel(
+                    farm_id=request_data.farm_id,
+                    soil_type=request_data.soil_type,
+                    latitude=request_data.latitude,
+                    longitude=request_data.longitude,
+                    soil_moisture=sensor_data.soil_moisture,
+                    soil_temperature=sensor_data.soil_temperature,
+                    electrical_conductivity=sensor_data.electrical_conductivity,
+                    soil_ph=sensor_data.soil_ph,
+                    relative_humidity=sensor_data.relative_humidity,
+                    solar_radiation=sensor_data.solar_radiation,
+                    nitrate_ppm=sensor_data.nitrate_ppm,
+                    recommended_crop=rec['crop_name'],
+                    reasoning=rec['reasoning']
+                )
+                db.add(new_recommendation)
+
+            db.commit()
+
+            # Return the parsed list of Pydantic models
+            return [
                 CropRecommendation(
                     crop_name=rec['crop_name'],
                     reasoning=rec['reasoning'],
                     suitability_score=rec['suitability_score']
-                ) for rec in parsed_response['recommendations']
+                ) for rec in recommendations_list
             ]
-            return recommendations_list
         else:
             print("Gemini response did not contain a valid JSON object.")
-            return [
-                CropRecommendation(crop_name="Error", reasoning="Could not parse API response.", suitability_score=0.0)]
-
+            db.rollback()
+            return []
     except Exception as e:
         print(f"Error calling Gemini API for crop recommendation: {e}")
-        return [CropRecommendation(crop_name="Error", reasoning="An issue occurred with the recommendation service.",
-                                   suitability_score=0.0)]
+        db.rollback()
+        return []

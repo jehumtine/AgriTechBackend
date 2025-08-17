@@ -1,6 +1,12 @@
 fastapi
 pydantic_settings
+pydantic[email]
 sqlalchemy
 uvicorn
 google-generativeai
 pillow
+pyjwt
+python-jose[cryptography]
+passlib
+httpx
+bcrypt

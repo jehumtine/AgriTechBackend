@@ -6,6 +6,7 @@ class NutrientPlanRequest(BaseModel):
     """
     Schema for the nutrient plan request parameters provided by the frontend.
     """
+    farm_id: int
     crop_name: str
     soil_type: str
     season: str

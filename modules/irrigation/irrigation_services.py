@@ -1,11 +1,14 @@
+# app/modules/irrigation/services.py
 import json
 from typing import List, Optional
 from datetime import datetime, date, timedelta
 
 import google.generativeai as genai
 import os
+from sqlalchemy.orm import Session
 
 from modules.irrigation.schemas import IrrigationRecommendation, IrrigationScheduleRequest
+from modules.irrigation.models import IrrigationSchedule
 from modules.sensor_data.services import get_simulated_sensor_data
 from services.open_meteo_client import get_current_weather_and_forecast
 
@@ -42,11 +45,12 @@ async def send_irrigation_command(
 
 
 async def get_irrigation_schedule_from_gemini(
-        request_data: IrrigationScheduleRequest
+        request_data: IrrigationScheduleRequest,
+        db: Session  # Added database session dependency
 ) -> List[IrrigationRecommendation]:
     """
     Generates an irrigation schedule using the Gemini API based on farm conditions,
-    sensor data, and weather forecasts.
+    sensor data, and weather forecasts, and saves the schedule to the database.
     """
     # 1. Gather all necessary input data
     sensor_data = get_simulated_sensor_data(request_data.latitude, request_data.longitude)
@@ -129,6 +133,16 @@ async def get_irrigation_schedule_from_gemini(
 
             schedule_list = []
             for rec in parsed_response.get('schedule', []):
+                # Save each recommendation to the database
+                new_schedule = IrrigationSchedule(
+                    farm_id=request_data.farm_id,
+                    crop_name=request_data.crop_name,
+                    scheduled_date=date.fromisoformat(rec['next_irrigation_date']),
+                    duration_minutes=float(rec['duration_minutes']),
+                    water_amount_mm=float(rec['water_amount_mm']),
+                    reasoning=rec['reasoning']
+                )
+                db.add(new_schedule)
                 schedule_list.append(
                     IrrigationRecommendation(
                         next_irrigation_date=date.fromisoformat(rec['next_irrigation_date']),
@@ -137,9 +151,11 @@ async def get_irrigation_schedule_from_gemini(
                         reasoning=rec['reasoning']
                     )
                 )
+            db.commit()  # Commit the changes to the database
             return schedule_list
         else:
             print("Gemini response did not contain a valid JSON object.")
+            db.rollback()
             return [
                 IrrigationRecommendation(
                     next_irrigation_date=date.today(),
@@ -151,6 +167,7 @@ async def get_irrigation_schedule_from_gemini(
 
     except Exception as e:
         print(f"Error calling Gemini API for irrigation scheduling: {e}")
+        db.rollback()  # Rollback in case of error
         return [
             IrrigationRecommendation(
                 next_irrigation_date=date.today(),

@@ -1,15 +1,16 @@
-import json
-from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
-import random
-
-import google.generativeai as genai
+# app/modules/nitrate/services.py
 import os
+import json
+import google.generativeai as genai
+from sqlalchemy.orm import Session
+from datetime import datetime
 
-from modules.nitrate.schemas import NitrateStatusResponse, NitrateAlert
+from modules.nitrate.schemas import NitrateStatusRequest, NitrateStatusResponse
+from modules.nitrate.models import NitrateLog
 from modules.sensor_data.services import get_simulated_sensor_data
+from core.config import settings
 
-# Configure your API key
+# Configure Gemini API
 API_KEY = "AIzaSyDBxs1alLA5dJK6n2B6rXHuPoIgfuq0PLk"
 if not API_KEY:
     print("WARNING: GOOGLE_API_KEY environment variable not set. Using a placeholder.")
@@ -17,88 +18,57 @@ if not API_KEY:
 else:
     genai.configure(api_key=API_KEY)
 
+text_model = genai.GenerativeModel("gemini-1.5-flash-latest")
 
-# A simple helper function to get the Gemini model instance
-def get_gemini_model_for_text():
+
+def save_nitrate_log(db: Session, farm_id: int, level: float, alert: str, notes: str):
     """
-    Returns a configured Gemini model for text-only generation.
+    Saves a nitrate monitoring log entry to the database.
     """
-    return genai.GenerativeModel("gemini-1.5-flash-latest")
+    db_log = NitrateLog(
+        farm_id=farm_id,
+        nitrate_level_ppm=level,
+        risk_level=alert,
+        notes=notes
+    )
+    db.add(db_log)
+    db.commit()
+    db.refresh(db_log)
 
 
-text_model = get_gemini_model_for_text()
-
-
-# --- Mock Service for Farm History (simulating a database query) ---
-def get_simulated_farm_history(farm_id: Optional[int]) -> Dict[str, Any]:
-    """
-    Simulates fetching recent farm history, including fertilizer applications.
-    In a real system, this would query a database.
-    """
-    # Create some mock historical data for demonstration
-    fertilizer_history = [
-        {
-            "fertilizer_type": "Urea",
-            "quantity_kg_per_acre": 50,
-            "application_date": (datetime.now() - timedelta(days=7)).isoformat()
-        },
-        {
-            "fertilizer_type": "D-Compound",
-            "quantity_kg_per_acre": 100,
-            "application_date": (datetime.now() - timedelta(days=14)).isoformat()
-        }
-    ]
-    return {
-        "farm_id": farm_id,
-        "fertilizer_history": fertilizer_history
-    }
-
-
-# --- Main Service for Nitrate Monitoring ---
-async def get_nitrate_status_from_gemini(
-        latitude: float,
-        longitude: float,
-        farm_id: Optional[int] = None
+async def get_nitrate_status(
+        request_data: NitrateStatusRequest,
+        db: Session
 ) -> NitrateStatusResponse:
     """
-    Simulates nitrate levels and generates a status report using the Gemini API.
+    Fetches simulated nitrate levels and uses Gemini to generate a status and notes.
     """
-    # Step 1: Simulate/fetch all required data
-    sensor_data = get_simulated_sensor_data(latitude, longitude)
-    farm_history = get_simulated_farm_history(farm_id)
+    # 1. Gather simulated sensor data
+    sensor_data = get_simulated_sensor_data(request_data.latitude, request_data.longitude)
+    current_nitrate_level_ppm = sensor_data.nitrate_ppm  # <-- EXTRACT THE VALUE HERE
 
-    # Step 2: Construct a comprehensive prompt
+    # 2. Construct a prompt for Gemini
     prompt = f"""
-    You are an expert soil scientist and environmental consultant for farms in Zambia.
-    Your task is to analyze a farm's conditions and predict the current nitrate leaching risk.
+    You are a soil and crop expert. Analyze the following nitrate level and provide a status and notes.
+    Nitrate Level: {current_nitrate_level_ppm} ppm
 
-    Conditions:
-    - Location: Latitude {latitude}, Longitude {longitude}
-    - Soil pH: {sensor_data.soil_ph}
-    - Soil Moisture: {sensor_data.soil_moisture}%
-    - Electrical Conductivity: {sensor_data.electrical_conductivity} dS/m
-    - Recent Fertilizer Applications (last 14 days): {json.dumps(farm_history['fertilizer_history'])}
+    - If the level is between 15-25 ppm, classify it as "Optimal" with notes on maintenance.
+    - If the level is below 15 ppm, classify it as "Low" and recommend a light nitrogen fertilizer application.
+    - If the level is above 25 ppm, classify it as "High" and advise on potential leaching or crop damage.
 
-    Based on this data, simulate the current nitrate level in the soil in parts per million (ppm). Then, assess the risk of nitrate leaching as "Low", "Medium", or "High" and provide a detailed message explaining your assessment. Also, provide any actionable advice to the farmer.
+    The response must be a JSON object with two keys: "alert" and "notes".
 
-    The response must be in a JSON format. Do not include any text before or after the JSON object.
-
-    Example JSON structure:
+    Example response:
     {{
-      "current_nitrate_level_ppm": 25.5,
-      "alert": {{
-        "risk_level": "Medium",
-        "message": "Nitrate levels are slightly elevated. This is likely due to the recent fertilizer application combined with high soil moisture. Consider reducing the next fertilizer application to prevent leaching."
-      }},
-      "notes": "The current soil conditions suggest a moderate risk of nitrogen runoff, which could be harmful to local water sources."
+      "alert": "Optimal",
+      "notes": "Current nitrate levels are within the optimal range. No immediate action is required. Monitor regularly."
     }}
     """
 
-    print("Sending nitrate monitoring prompt to Gemini API...")
+    print("Sending nitrate level analysis prompt to Gemini API...")
     try:
         response = await text_model.generate_content_async(prompt)
         response_text = response.text
-        print(f"Gemini raw response: {response_text}")
 
         json_start = response_text.find('{')
         json_end = response_text.rfind('}') + 1
@@ -107,31 +77,37 @@ async def get_nitrate_status_from_gemini(
             json_response_string = response_text[json_start:json_end]
             parsed_response = json.loads(json_response_string)
 
-            alert = NitrateAlert(
-                risk_level=parsed_response['alert']['risk_level'],
-                message=parsed_response['alert']['message']
+            # Save the new log entry to the database
+            save_nitrate_log(
+                db=db,
+                farm_id=request_data.farm_id,
+                level=current_nitrate_level_ppm,
+                alert=parsed_response['alert'],
+                notes=parsed_response['notes']
             )
 
             return NitrateStatusResponse(
-                current_nitrate_level_ppm=parsed_response['current_nitrate_level_ppm'],
-                timestamp=datetime.now(),
-                alert=alert,
-                notes=parsed_response['notes']
+                current_nitrate_level_ppm=current_nitrate_level_ppm,
+                alert=parsed_response['alert'],
+                notes=parsed_response['notes'],
+                timestamp=datetime.now()
             )
         else:
             print("Gemini response did not contain a valid JSON object.")
+            db.rollback()
             return NitrateStatusResponse(
-                current_nitrate_level_ppm=0.0,
-                timestamp=datetime.now(),
-                alert=NitrateAlert(risk_level="Error", message="Could not parse API response."),
-                notes="An issue occurred with the recommendation service."
+                current_nitrate_level_ppm=current_nitrate_level_ppm,
+                alert="Processing Error",
+                notes="Could not parse API response for nitrate analysis.",
+                timestamp=datetime.now()
             )
 
     except Exception as e:
-        print(f"Error calling Gemini API for nitrate monitoring: {e}")
+        print(f"Error calling Gemini API for nitrate analysis: {e}")
+        db.rollback()
         return NitrateStatusResponse(
-            current_nitrate_level_ppm=0.0,
-            timestamp=datetime.now(),
-            alert=NitrateAlert(risk_level="Error", message=f"An issue occurred with the recommendation service: {e}"),
-            notes="An error occurred with the nitrate monitoring service."
+            current_nitrate_level_ppm=current_nitrate_level_ppm,
+            alert="Service Error",
+            notes=f"An issue occurred with the analysis service: {e}",
+            timestamp=datetime.now()
         )

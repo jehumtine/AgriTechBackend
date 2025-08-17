@@ -1,20 +1,19 @@
-# app/modules/crop/schemas.py
-from pydantic import BaseModel
-from typing import List
+from pydantic import BaseModel, Field
+from typing import List, Optional
 from datetime import datetime
 
 class RecommendationRequest(BaseModel):
     """
-    Pydantic schema for the crop recommendation request parameters,
-    now simplified to only require location.
+    Pydantic schema for the crop recommendation request parameters.
     """
+    farm_id: int
+    soil_type: str
     latitude: float
     longitude: float
 
 class SensorData(BaseModel):
     """
     Schema for the detailed sensor data collected by the backend.
-    This is an internal schema used by the service layer.
     """
     latitude: float
     longitude: float
@@ -24,6 +23,7 @@ class SensorData(BaseModel):
     soil_ph: float
     relative_humidity: float
     solar_radiation: float
+    nitrate_ppm: float
 
 class CropRecommendation(BaseModel):
     """
@@ -38,4 +38,4 @@ class RecommendationResponse(BaseModel):
     Schema for the full crop recommendation response.
     """
     recommendations: List[CropRecommendation]
-    timestamp: datetime
+    timestamp: datetime = Field(default_factory=datetime.now)

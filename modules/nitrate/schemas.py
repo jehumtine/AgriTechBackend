@@ -8,13 +8,15 @@ class NitrateStatusRequest(BaseModel):
     """
     latitude: float
     longitude: float
-    farm_id: Optional[int] = None
+    farm_id: int
 
 class NitrateAlert(BaseModel):
     """
     Schema for an individual nitrate alert.
     """
     risk_level: str  # e.g., "Low", "Medium", "High"
+    alert: str
+    notes: str
     message: str     # A detailed message explaining the status and any warnings
 
 class NitrateStatusResponse(BaseModel):
@@ -23,5 +25,5 @@ class NitrateStatusResponse(BaseModel):
     """
     current_nitrate_level_ppm: float
     timestamp: datetime
-    alert: NitrateAlert
+    alert: str
     notes: str

@@ -1,44 +1,36 @@
 # app/modules/crop/routes.py
-from fastapi import APIRouter, Query, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, Depends, Body
+from sqlalchemy.orm import Session
 from datetime import datetime
 
-from modules.crop.schemas import RecommendationResponse
+from modules.crop.schemas import RecommendationRequest, RecommendationResponse
 from modules.crop.services import get_crop_recommendations_from_gemini
-
-# Assuming we have a service to simulate sensor data
-from modules.sensor_data.services import get_simulated_sensor_data
+from core.dependencies import get_current_user, get_db
+from modules.auth.models import User
 
 router = APIRouter()
 
-@router.get("/recommend/", response_model=RecommendationResponse)
-async def recommend_crops(
-    soil_type: str = Query(..., description="The classified soil type (e.g., Loamy Soil)."),
-    season: str = Query(..., description="The current season (e.g., Rainy, Dry)."),
-    zone: str = Query(..., description="The agro-ecological zone (e.g., Zone I, Zone II)."),
-    latitude: float = Query(..., description="Latitude of the farm location."),
-    longitude: float = Query(..., description="Longitude of the farm location."),
+
+@router.post("/recommend/", response_model=RecommendationResponse)
+async def get_crop_recommendation_endpoint(
+        request: RecommendationRequest = Body(...),
+        current_user: User = Depends(get_current_user),
+        db: Session = Depends(get_db)
 ):
     """
-    Recommends suitable crops based on general conditions and simulated real-time
-    sensor data from a specific farm location using the Gemini AI model.
+    Generates a list of crop recommendations for a specific farm location.
     """
-    try:
-        # Step 1: Simulate the sensor data for the given location
-        sensor_data = get_simulated_sensor_data(latitude, longitude)
+    # Verify the farm_id in the request belongs to the current user
+    if not any(farm.id == request.farm_id for farm in current_user.farms):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access this farm"
+        )
 
-        # Step 2: Pass all parameters to the Gemini recommendation service
+    try:
         recommendations_list = await get_crop_recommendations_from_gemini(
-            soil_type=soil_type,
-            season=season,
-            zone=zone,
-            latitude=sensor_data.latitude,
-            longitude=sensor_data.longitude,
-            soil_moisture=sensor_data.soil_moisture,
-            soil_temperature=sensor_data.soil_temperature,
-            electrical_conductivity=sensor_data.electrical_conductivity,
-            soil_ph=sensor_data.soil_ph,
-            relative_humidity=sensor_data.relative_humidity,
-            solar_radiation=sensor_data.solar_radiation,
+            request_data=request,
+            db=db
         )
 
         return RecommendationResponse(

@@ -1,27 +1,38 @@
-from modules.crop.schemas import RecommendationRequest, SensorData
 import random
+from modules.crop.schemas import SensorData
+
 
 def get_simulated_sensor_data(latitude: float, longitude: float) -> SensorData:
     """
-    Simulates real-time sensor data from a specific location (latitude, longitude).
-    This function can be replaced with a real data fetching service later.
+    Simulates fetching comprehensive sensor data for a given location.
+    In a real-world scenario, this would involve fetching data from a database or an IoT platform.
     """
-    # These values are generated to be plausible for an agricultural setting.
-    # You can adjust these ranges to better reflect conditions in Zambia.
-    soil_moisture = round(random.uniform(20.0, 60.0), 2)
-    soil_temperature = round(random.uniform(15.0, 35.0), 2)
-    electrical_conductivity = round(random.uniform(0.5, 3.0), 2) # dS/m
-    soil_ph = round(random.uniform(5.5, 7.5), 2)
-    relative_humidity = round(random.uniform(40.0, 95.0), 2)
-    solar_radiation = round(random.uniform(100.0, 1000.0), 2) # W/m^2
+    # Simple simulation based on location, for demonstration purposes
+    # The values are intentionally varied slightly
+    moisture = 50.0 + (latitude % 10) * 0.5
+    temperature = 30.0 + (longitude % 10) * 0.3
+    ec = 2.5 + (latitude % 5) * 0.1
+    ph = 7.0 + (longitude % 3) * 0.1
+    humidity = 60.0 + (latitude % 10) * 0.4
+    solar = 300.0 + (longitude % 10) * 20.0
+    nitrate = 20.0 + (latitude % 10) * 1.5  # Simulate a value for nitrate
 
     return SensorData(
+        soil_moisture=round(moisture, 2),
+        soil_temperature=round(temperature, 2),
+        electrical_conductivity=round(ec, 2),
+        soil_ph=round(ph, 2),
+        relative_humidity=round(humidity, 2),
+        solar_radiation=round(solar, 2),
+        nitrate_ppm=round(nitrate, 2),
         latitude=latitude,
-        longitude=longitude,
-        soil_moisture=soil_moisture,
-        soil_temperature=soil_temperature,
-        electrical_conductivity=electrical_conductivity,
-        soil_ph=soil_ph,
-        relative_humidity=relative_humidity,
-        solar_radiation=solar_radiation,
+        longitude=longitude
     )
+
+
+# The nitrate-specific function should now just call the main one
+def get_simulated_nitrate_data(latitude: float, longitude: float) -> SensorData:
+    """
+    Returns a comprehensive SensorData object, which includes nitrate levels.
+    """
+    return get_simulated_sensor_data(latitude, longitude)
